@@ -1,264 +1,292 @@
-// ============================================================
-// Виртуальная лабораторная: испытание пластинчатого теплообменника
-// Модель основана на методике определения Q, Δt_ln и k (см. практикум)
-// и на инженерной модели ε-NTU для расчёта выходных температур.
-//
-// Входы задаём как: T1 (горячий вход), T3 (холодный вход),
-// Vг (горячий расход), Vх фиксированный = 1.2 л/мин, k (Вт/(м2·К)).
-// Выходы считаем: T4 (горячий выход), T2 (холодный выход).
-// ============================================================
+const F = 0.12;
+const LAB_TITLE = 'Испытание пластинчатого теплообменника';
 
-const F = 0.12;     // м2 — площадь теплообмена пластинчатого теплообменника
-const VcFixed = 1.2; // л/мин — расход холодного контура (в методике постоянный)
-const rho = 1000;   // кг/м3 — для воды, чтобы л/с численно = кг/с
-
-// Таблица теплоёмкости воды (Дж/(кг·К)) по температуре (°C) — слабая зависимость.
-// Для модели достаточно линейной интерполяции между узлами.
 const cpTable = [
-  { t: 0,   cp: 4218 },
-  { t: 10,  cp: 4192 },
-  { t: 20,  cp: 4182 },
-  { t: 40,  cp: 4178 },
-  { t: 60,  cp: 4184 },
-  { t: 80,  cp: 4196 },
-  { t: 100, cp: 4216 },
+  { t: 0, cp: 4218 }, { t: 10, cp: 4192 }, { t: 20, cp: 4182 },
+  { t: 40, cp: 4178 }, { t: 60, cp: 4184 }, { t: 80, cp: 4196 }, { t: 100, cp: 4216 }
 ];
 
-function lerp(a, b, x){ return a + (b - a) * x; }
+const $ = (id) => document.getElementById(id);
+const els = {
+  mode: $('mode'), ThIn: $('ThIn'), TcIn: $('TcIn'), Vh: $('Vh'), Vc: $('Vc'), k: $('k'), loss: $('loss'),
+  ThInVal: $('ThInVal'), TcInVal: $('TcInVal'), VhVal: $('VhVal'), VcVal: $('VcVal'), kVal: $('kVal'), lossVal: $('lossVal'),
+  modeName: $('modeName'), epsVal: $('epsVal'), Qcold: $('Qcold'), Qhot: $('Qhot'), ThOut: $('ThOut'), TcOut: $('TcOut'), dtlm: $('dtlm'), kCalc: $('kCalc'),
+  currentTable: $('currentTable'), journalTable: $('journalTable'), analytics: $('analytics'),
+  runBtn: $('runBtn'), addJournalBtn: $('addJournalBtn'), clearJournalBtn: $('clearJournalBtn'), exportBtn: $('exportBtn'), resetBtn: $('resetBtn')
+};
 
-function cpWater(tC){
-  if (tC <= cpTable[0].t) return cpTable[0].cp;
-  if (tC >= cpTable[cpTable.length - 1].t) return cpTable[cpTable.length - 1].cp;
-  for (let i = 0; i < cpTable.length - 1; i++){
-    const a = cpTable[i], b = cpTable[i+1];
-    if (tC >= a.t && tC <= b.t){
-      const x = (tC - a.t) / (b.t - a.t);
-      return lerp(a.cp, b.cp, x);
-    }
+let chart;
+let lastInputs = null;
+let lastResult = null;
+let journal = [];
+
+function lerp(a, b, x) { return a + (b - a) * x; }
+function cpWater(t) {
+  if (t <= cpTable[0].t) return cpTable[0].cp;
+  if (t >= cpTable[cpTable.length - 1].t) return cpTable[cpTable.length - 1].cp;
+  for (let i = 0; i < cpTable.length - 1; i++) {
+    const a = cpTable[i], b = cpTable[i + 1];
+    if (t >= a.t && t <= b.t) return lerp(a.cp, b.cp, (t - a.t) / (b.t - a.t));
   }
   return 4180;
 }
 
-// ε-NTU для параллельного (прямоток) и противоточного теплообменников
-function effectiveness(mode, NTU, Cr){
-  if (NTU < 1e-12) return 0;
-  // Cr = Cmin/Cmax, 0..1
-  if (mode === 'parallel'){
-    // ε = (1 - exp(-NTU*(1+Cr))) / (1 + Cr)
-    return (1 - Math.exp(-NTU * (1 + Cr))) / (1 + Cr);
-  }
-  // counter
-  if (Math.abs(1 - Cr) < 1e-9){
-    // Cr -> 1: ε = NTU / (1 + NTU)
-    return NTU / (1 + NTU);
-  }
-  // ε = (1 - exp(-NTU*(1-Cr))) / (1 - Cr*exp(-NTU*(1-Cr)))
+function lpmToKgSec(lpm) { return lpm / 60; }
+
+function effectiveness(mode, NTU, Cr) {
+  if (mode === 'parallel') return (1 - Math.exp(-NTU * (1 + Cr))) / (1 + Cr);
+  if (Math.abs(1 - Cr) < 1e-9) return NTU / (1 + NTU);
   const a = Math.exp(-NTU * (1 - Cr));
   return (1 - a) / (1 - Cr * a);
 }
 
-// Логарифмический температурный напор Δt_ln
-function dtlm(mode, ThIn, ThOut, TcIn, TcOut){
-  // Прямоток:
-  // Δt1 = ThIn - TcIn
-  // Δt2 = ThOut - TcOut
-  // Противоток:
-  // Δt1 = ThIn - TcOut
-  // Δt2 = ThOut - TcIn
-  const d1 = (mode === 'parallel') ? (ThIn - TcIn) : (ThIn - TcOut);
-  const d2 = (mode === 'parallel') ? (ThOut - TcOut) : (ThOut - TcIn);
-
-  // Защита от нулей/смены знака (в учебном режиме не допускаем пересечения)
-  const eps = 1e-9;
-  const d1s = Math.max(d1, eps);
-  const d2s = Math.max(d2, eps);
-
-  if (Math.abs(d1s - d2s) < 1e-9) return d1s;
-  return (d1s - d2s) / Math.log(d1s / d2s);
+function dtlm(mode, ThIn, ThOut, TcIn, TcOut) {
+  const d1 = mode === 'parallel' ? (ThIn - TcIn) : (ThIn - TcOut);
+  const d2 = mode === 'parallel' ? (ThOut - TcOut) : (ThOut - TcIn);
+  const a = Math.max(d1, 1e-8), b = Math.max(d2, 1e-8);
+  if (Math.abs(a - b) < 1e-10) return a;
+  return (a - b) / Math.log(a / b);
 }
 
-function lpmToKgPerSec(lpm){
-  // л/мин -> л/с -> кг/с (ρ=1000, в методике это допущение)
-  return (lpm / 60.0); // численно кг/с
+function modeName(mode) { return mode === 'parallel' ? 'Прямоток' : 'Противоток'; }
+function fmt(n, d = 2) { return Number(n).toFixed(d); }
+
+function getInputs() {
+  return {
+    mode: els.mode.value,
+    ThIn: parseFloat(els.ThIn.value),
+    TcIn: parseFloat(els.TcIn.value),
+    Vh: parseFloat(els.Vh.value),
+    Vc: parseFloat(els.Vc.value),
+    k: parseFloat(els.k.value),
+    loss: parseFloat(els.loss.value)
+  };
 }
 
-// ---- DOM
-const els = {
-  mode: document.getElementById('mode'),
-  ThIn: document.getElementById('ThIn'),
-  TcIn: document.getElementById('TcIn'),
-  Vh: document.getElementById('Vh'),
-  k: document.getElementById('k'),
-  loss: document.getElementById('loss'),
+function compute(inputs) {
+  const mh = lpmToKgSec(inputs.Vh);
+  const mc = lpmToKgSec(inputs.Vc);
+  const cph = cpWater(inputs.ThIn);
+  const cpc = cpWater(inputs.TcIn);
+  const Ch = mh * cph;
+  const Cc = mc * cpc;
+  const Cmin = Math.min(Ch, Cc);
+  const Cmax = Math.max(Ch, Cc);
+  const Cr = Cmin / Cmax;
+  const UA = inputs.k * F;
+  const NTU = UA / Math.max(Cmin, 1e-9);
+  const eps = effectiveness(inputs.mode, NTU, Cr);
+  const Qmax = Cmin * (inputs.ThIn - inputs.TcIn);
+  const Qhot = eps * Qmax;
+  const Qcold = Qhot * (1 - Math.min(Math.max(inputs.loss, 0), 100) / 100);
+  const ThOut = inputs.ThIn - Qhot / Math.max(Ch, 1e-9);
+  const TcOut = inputs.TcIn + Qcold / Math.max(Cc, 1e-9);
+  const dTln = dtlm(inputs.mode, inputs.ThIn, ThOut, inputs.TcIn, TcOut);
+  const kCalc = Qcold / Math.max(F * dTln, 1e-9);
+  return { mh, mc, cph, cpc, Ch, Cc, Cr, NTU, eps, Qhot, Qcold, ThOut, TcOut, dTln, kCalc };
+}
 
-  ThInVal: document.getElementById('ThInVal'),
-  TcInVal: document.getElementById('TcInVal'),
-  VhVal: document.getElementById('VhVal'),
-  VcVal: document.getElementById('VcVal'),
-  kVal: document.getElementById('kVal'),
-  lossVal: document.getElementById('lossVal'),
+function renderCurrentTable(inputs, result) {
+  const rows = [
+    ['Схема движения', '—', modeName(inputs.mode)],
+    ['Температура горячего входа', 'T1', `${fmt(inputs.ThIn, 1)} °C`],
+    ['Температура горячего выхода', 'T4', `${fmt(result.ThOut, 1)} °C`],
+    ['Температура холодного входа', 'T3', `${fmt(inputs.TcIn, 1)} °C`],
+    ['Температура холодного выхода', 'T2', `${fmt(result.TcOut, 1)} °C`],
+    ['Расход горячего', 'Vг', `${fmt(inputs.Vh, 2)} л/мин`],
+    ['Расход холодного', 'Vх', `${fmt(inputs.Vc, 2)} л/мин`],
+    ['Теплота по горячему', 'Qг', `${fmt(result.Qhot, 0)} Вт`],
+    ['Теплота по холодному', 'Qх', `${fmt(result.Qcold, 0)} Вт`],
+    ['Логарифмический температурный напор', 'Δtln', `${fmt(result.dTln, 2)} °C`],
+    ['Коэффициент теплопередачи расчетный', 'kрасч', `${fmt(result.kCalc, 0)} Вт/(м²·К)`]
+  ];
 
-  modeName: document.getElementById('modeName'),
-  epsVal: document.getElementById('epsVal'),
-  Qcold: document.getElementById('Qcold'),
-  dtlm: document.getElementById('dtlm'),
-  kCalc: document.getElementById('kCalc'),
-  ThOut: document.getElementById('ThOut'),
-  TcOut: document.getElementById('TcOut'),
+  els.currentTable.innerHTML = rows.map((r) => `<tr><td>${r[0]}</td><td>${r[1]}</td><td>${r[2]}</td></tr>`).join('');
+}
 
-  resetBtn: document.getElementById('resetBtn'),
-};
+function renderJournal() {
+  if (!journal.length) {
+    els.journalTable.innerHTML = '<tr><td colspan="10">Журнал пуст. Выполните эксперимент и добавьте запись.</td></tr>';
+    return;
+  }
+  els.journalTable.innerHTML = journal.map((e, i) => `
+    <tr>
+      <td>${i + 1}</td><td>${e.time}</td><td>${modeName(e.inputs.mode)}</td>
+      <td>${fmt(e.inputs.ThIn, 1)}</td><td>${fmt(e.inputs.TcIn, 1)}</td>
+      <td>${fmt(e.inputs.Vh, 2)}</td><td>${fmt(e.inputs.Vc, 2)}</td>
+      <td>${fmt(e.result.eps, 3)}</td><td>${fmt(e.result.Qcold, 0)}</td><td>${fmt(e.result.kCalc, 0)}</td>
+    </tr>
+  `).join('');
+}
 
-// ---- Chart
-let chart;
+function renderAnalytics(inputs, result) {
+  const imbalance = Math.abs(result.Qhot - result.Qcold) / Math.max(Math.abs(result.Qhot), 1e-9) * 100;
+  const epsBand = result.eps >= 0.7 ? 'высокая' : result.eps >= 0.5 ? 'удовлетворительная' : 'пониженная';
+  const balanceBand = imbalance <= 8 ? 'баланс тепловых потоков согласован' : imbalance <= 15 ? 'наблюдается умеренное расхождение теплового баланса' : 'наблюдается значительное расхождение теплового баланса';
 
-function makeChart(){
-  const ctx = document.getElementById('mainChart');
-  chart = new Chart(ctx, {
+  const recMode = inputs.mode === 'counter'
+    ? 'Режим противотока выбран корректно: при дальнейших опытах рекомендуется удерживать его как базовый для достижения максимального температурного напора.'
+    : 'Рекомендуется сравнить результаты с противоточным режимом при тех же расходах: как правило, это повышает ε и уменьшает требуемую поверхность теплообмена.';
+
+  const recFouling = result.kCalc < inputs.k * 0.75
+    ? 'Расчетный коэффициент kрасч заметно ниже заданного — возможна имитация загрязнения поверхностей или рост термических сопротивлений. Целесообразно повысить турбулизацию потока (увеличить расход).'
+    : 'Сопоставление kрасч и заданного k показывает стабильный режим теплообмена без выраженной деградации теплопередачи.';
+
+  els.analytics.innerHTML = `
+    <p><strong>Экспертная оценка:</strong> эффективность ε = <b>${fmt(result.eps, 3)}</b>, что соответствует уровню «<b>${epsBand}</b>» для учебного пластинчатого аппарата.</p>
+    <p><strong>Диагностика:</strong> Qг = <b>${fmt(result.Qhot, 0)} Вт</b>, Qх = <b>${fmt(result.Qcold, 0)} Вт</b>, расхождение <b>${fmt(imbalance, 1)}%</b>; ${balanceBand}.</p>
+    <p><strong>Параметры теплопередачи:</strong> Δtln = <b>${fmt(result.dTln, 2)} °C</b>, kрасч = <b>${fmt(result.kCalc, 0)} Вт/(м²·К)</b>.</p>
+    <p><strong>Профессиональные рекомендации инженера-теплотехника:</strong></p>
+    <ul>
+      <li>${recMode}</li>
+      <li>${recFouling}</li>
+      <li>Для научно достоверной обработки выполните серию не менее 5 опытов со ступенчатым изменением Vг и Vх, затем анализируйте тренд ε(Vг) и kрасч(V).</li>
+    </ul>
+  `;
+}
+
+function updateChart(inputs) {
+  const labels = [];
+  const parallel = [];
+  const counter = [];
+
+  for (let v = 0.2; v <= 3.001; v += 0.1) {
+    labels.push(v.toFixed(1));
+    parallel.push(compute({ ...inputs, mode: 'parallel', Vh: v }).eps);
+    counter.push(compute({ ...inputs, mode: 'counter', Vh: v }).eps);
+  }
+  const current = compute(inputs).eps;
+
+  chart.data.labels = labels;
+  chart.data.datasets[0].data = parallel;
+  chart.data.datasets[1].data = counter;
+  chart.data.datasets[2].data = [{ x: inputs.Vh.toFixed(1), y: current }];
+  chart.update('none');
+}
+
+function runExperiment() {
+  const inputs = getInputs();
+  if (inputs.ThIn <= inputs.TcIn + 1) {
+    els.ThIn.value = String(inputs.TcIn + 5);
+  }
+  const normalized = getInputs();
+  const result = compute(normalized);
+  lastInputs = { ...normalized };
+  lastResult = { ...result };
+
+  els.ThInVal.textContent = `${fmt(normalized.ThIn, 0)} °C`;
+  els.TcInVal.textContent = `${fmt(normalized.TcIn, 0)} °C`;
+  els.VhVal.textContent = `${fmt(normalized.Vh, 1)} л/мин`;
+  els.VcVal.textContent = `${fmt(normalized.Vc, 1)} л/мин`;
+  els.kVal.textContent = `${fmt(normalized.k, 0)} Вт/(м²·К)`;
+  els.lossVal.textContent = `${fmt(normalized.loss, 0)} %`;
+
+  els.modeName.textContent = modeName(normalized.mode);
+  els.epsVal.textContent = fmt(result.eps, 3);
+  els.Qcold.textContent = fmt(result.Qcold / 1000, 2);
+  els.Qhot.textContent = fmt(result.Qhot / 1000, 2);
+  els.ThOut.textContent = fmt(result.ThOut, 1);
+  els.TcOut.textContent = fmt(result.TcOut, 1);
+  els.dtlm.textContent = fmt(result.dTln, 2);
+  els.kCalc.textContent = fmt(result.kCalc, 0);
+
+  renderCurrentTable(normalized, result);
+  renderAnalytics(normalized, result);
+  updateChart(normalized);
+}
+
+function addToJournal() {
+  if (!lastInputs || !lastResult) return;
+  journal.unshift({
+    time: new Date().toLocaleString('ru-RU', { hour12: false }),
+    inputs: { ...lastInputs },
+    result: { eps: lastResult.eps, Qcold: lastResult.Qcold, kCalc: lastResult.kCalc }
+  });
+  if (journal.length > 100) journal = journal.slice(0, 100);
+  renderJournal();
+}
+
+function clearJournal() {
+  journal = [];
+  renderJournal();
+}
+
+function exportExcelReport() {
+  if (!lastInputs || !lastResult) {
+    alert('Сначала проведите эксперимент.');
+    return;
+  }
+  const esc = (v) => `"${String(v).replace(/"/g, '""')}"`;
+  const rows = [
+    ['Название работы', LAB_TITLE],
+    ['Дата проведения', new Date().toLocaleString('ru-RU', { hour12: false })],
+    [], ['Исходные данные'],
+    ['Режим', modeName(lastInputs.mode)],
+    ['T1, °C', fmt(lastInputs.ThIn, 1)], ['T3, °C', fmt(lastInputs.TcIn, 1)],
+    ['Vг, л/мин', fmt(lastInputs.Vh, 2)], ['Vх, л/мин', fmt(lastInputs.Vc, 2)],
+    ['k, Вт/(м²·К)', fmt(lastInputs.k, 0)], ['Потери, %', fmt(lastInputs.loss, 0)],
+    [], ['Результаты эксперимента'],
+    ['T4, °C', fmt(lastResult.ThOut, 1)], ['T2, °C', fmt(lastResult.TcOut, 1)],
+    ['Qг, Вт', fmt(lastResult.Qhot, 0)], ['Qх, Вт', fmt(lastResult.Qcold, 0)],
+    ['Эффективность ε', fmt(lastResult.eps, 3)], ['Δtln, °C', fmt(lastResult.dTln, 2)],
+    ['kрасч, Вт/(м²·К)', fmt(lastResult.kCalc, 0)],
+    [], ['Выводы'],
+    ['Краткая экспертная оценка', `Режим: ${modeName(lastInputs.mode)}; ε=${fmt(lastResult.eps, 3)}; kрасч=${fmt(lastResult.kCalc, 0)} Вт/(м²·К)`],
+    [], ['Журнал экспериментов'],
+    ['№', 'Дата/время', 'Режим', 'T1', 'T3', 'Vг', 'Vх', 'ε', 'Qх, Вт', 'kрасч']
+  ];
+
+  journal.forEach((e, i) => {
+    rows.push([i + 1, e.time, modeName(e.inputs.mode), fmt(e.inputs.ThIn, 1), fmt(e.inputs.TcIn, 1), fmt(e.inputs.Vh, 2), fmt(e.inputs.Vc, 2), fmt(e.result.eps, 3), fmt(e.result.Qcold, 0), fmt(e.result.kCalc, 0)]);
+  });
+
+  const content = '\uFEFF' + rows.map((r) => r.map((c) => esc(c ?? '')).join(';')).join('\n');
+  const blob = new Blob([content], { type: 'text/csv;charset=utf-8;' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'plate-heat-exchanger-lab-report.csv';
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+function initChart() {
+  chart = new Chart(document.getElementById('mainChart'), {
     type: 'line',
     data: {
       labels: [],
       datasets: [
-        { label: 'Прямоток', data: [], borderWidth: 2, pointRadius: 0 },
-        { label: 'Противоток', data: [], borderWidth: 2, pointRadius: 0 },
+        { label: 'Прямоток', data: [], borderWidth: 2, pointRadius: 0, tension: 0.2 },
+        { label: 'Противоток', data: [], borderWidth: 2, pointRadius: 0, tension: 0.2 },
+        { label: 'Текущая точка', data: [], showLine: false, pointRadius: 5 }
       ]
     },
     options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      interaction: { mode: 'nearest', intersect: false },
-      plugins: {
-        legend: { position: 'top' },
-        tooltip: { callbacks: {
-          label: (ctx) => `${ctx.dataset.label}: ε = ${ctx.parsed.y.toFixed(3)}`
-        }}
-      },
+      responsive: true, maintainAspectRatio: false,
       scales: {
-        x: {
-          title: { display: true, text: 'Vг, л/мин' },
-          ticks: { maxTicksLimit: 8 }
-        },
-        y: {
-          title: { display: true, text: 'Эффективность ε' },
-          min: 0,
-          max: 1
-        }
+        x: { title: { display: true, text: 'Vг, л/мин' } },
+        y: { title: { display: true, text: 'Эффективность ε' }, min: 0, max: 1 }
       }
     }
   });
-
-  // фиксируем высоту контейнера canvas (иначе может схлопнуться)
-  ctx.parentElement.style.height = '360px';
 }
 
-function formatTemp(t){ return `${t.toFixed(1)} °C`; }
-function formatW(Q){ return `${(Q/1000).toFixed(2)} кВт`; }
-function formatK(x){ return `${x.toFixed(2)} °C`; }
-function formatKcoef(k){ return `${Math.round(k)} Вт/(м²·К)`; }
-
-function computeOnce(mode, ThIn, TcIn, VhLpm, kInput, lossPct){
-  // расходы
-  const mh = lpmToKgPerSec(VhLpm);
-  const mc = lpmToKgPerSec(VcFixed);
-
-  // теплоёмкости при средних температурах (первое приближение: по входам)
-  const cph = cpWater(ThIn);
-  const cpc = cpWater(TcIn);
-
-  const Ch = mh * cph;
-  const Cc = mc * cpc;
-
-  const Cmin = Math.min(Ch, Cc);
-  const Cmax = Math.max(Ch, Cc);
-  const Cr = Cmin / Cmax;
-
-  // UA = kF
-  const UA = kInput * F;
-  const NTU = UA / Cmin;
-
-  const eps = effectiveness(mode, NTU, Cr);
-
-  const Qmax = Cmin * (ThIn - TcIn);
-  const Q = eps * Qmax; // Вт — «идеально переданное» в теплообменнике (без внешних потерь)
-
-  // вводим потери: полезная теплота, полученная холодным контуром
-  const loss = Math.min(Math.max(lossPct, 0), 100) / 100;
-  const Qcold = (1 - loss) * Q;
-
-  const ThOut = ThIn - Q / Ch;
-  const TcOut = TcIn + Qcold / Cc;
-
-  const dt = dtlm(mode, ThIn, ThOut, TcIn, TcOut);
-  const kCalc = Qcold / (F * dt);
-
-  return { mh, mc, cph, cpc, Ch, Cc, Cmin, Cmax, Cr, UA, NTU, eps, Q, Qcold, ThOut, TcOut, dt, kCalc };
+function resetDefaults() {
+  els.mode.value = 'counter';
+  els.ThIn.value = '60'; els.TcIn.value = '20';
+  els.Vh.value = '1.6'; els.Vc.value = '1.2';
+  els.k.value = '2600'; els.loss.value = '5';
+  runExperiment();
+  renderJournal();
 }
 
-function updateUI(){
-  const mode = els.mode.value;
-  const ThIn = parseFloat(els.ThIn.value);
-  const TcIn = parseFloat(els.TcIn.value);
-  const Vh = parseFloat(els.Vh.value);
-  const kInput = parseFloat(els.k.value);
-  const loss = parseFloat(els.loss.value);
+['input', 'change'].forEach((evt) => {
+  [els.mode, els.ThIn, els.TcIn, els.Vh, els.Vc, els.k, els.loss].forEach((el) => el.addEventListener(evt, runExperiment));
+});
+els.runBtn.addEventListener('click', runExperiment);
+els.addJournalBtn.addEventListener('click', addToJournal);
+els.clearJournalBtn.addEventListener('click', clearJournal);
+els.exportBtn.addEventListener('click', exportExcelReport);
+els.resetBtn.addEventListener('click', resetDefaults);
 
-  // values on controls
-  els.ThInVal.textContent = ThIn.toFixed(0);
-  els.TcInVal.textContent = TcIn.toFixed(0);
-  els.VhVal.textContent = Vh.toFixed(1);
-  els.VcVal.textContent = VcFixed.toFixed(1);
-  els.kVal.textContent = Math.round(kInput);
-  els.lossVal.textContent = loss.toFixed(0);
-
-  // compute for current mode
-  const r = computeOnce(mode, ThIn, TcIn, Vh, kInput, loss);
-
-  els.modeName.textContent = (mode === 'parallel') ? 'Прямоток' : 'Противоток';
-  els.epsVal.textContent = r.eps.toFixed(3);
-  els.Qcold.textContent = formatW(r.Qcold);
-  els.dtlm.textContent = formatK(r.dt);
-  els.kCalc.textContent = formatKcoef(r.kCalc);
-  els.ThOut.textContent = formatTemp(r.ThOut);
-  els.TcOut.textContent = formatTemp(r.TcOut);
-
-  // update chart: ε(Vг) for both modes, keeping other params same
-  const xs = [];
-  const ysP = [];
-  const ysC = [];
-
-  for (let v = 0.2; v <= 3.0001; v += 0.1){
-    xs.push(v.toFixed(1));
-    ysP.push(computeOnce('parallel', ThIn, TcIn, v, kInput, loss).eps);
-    ysC.push(computeOnce('counter',  ThIn, TcIn, v, kInput, loss).eps);
-  }
-
-  chart.data.labels = xs;
-  chart.data.datasets[0].data = ysP;
-  chart.data.datasets[1].data = ysC;
-  chart.update('none');
-}
-
-function bind(){
-  ['change','input'].forEach(evt => {
-    els.mode.addEventListener(evt, updateUI);
-    els.ThIn.addEventListener(evt, updateUI);
-    els.TcIn.addEventListener(evt, updateUI);
-    els.Vh.addEventListener(evt, updateUI);
-    els.k.addEventListener(evt, updateUI);
-    els.loss.addEventListener(evt, updateUI);
-  });
-
-  els.resetBtn.addEventListener('click', () => {
-    els.mode.value = 'counter';
-    els.ThIn.value = 55;
-    els.TcIn.value = 20;
-    els.Vh.value = 1.5;
-    els.k.value = 2500;
-    els.loss.value = 5;
-    updateUI();
-  });
-}
-
-makeChart();
-bind();
-updateUI();
+initChart();
+resetDefaults();
