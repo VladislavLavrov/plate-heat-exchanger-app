@@ -4,203 +4,129 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <title>Испытание пластинчатого теплообменника — виртуальная лабораторная</title>
-
   <link rel="stylesheet" href="./styles.css" />
-
-  <!-- Chart.js -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 </head>
-
 <body>
   <header class="header">
     <div class="header-inner">
-      <div class="logo-block">
-        <img src="./assets/urfu.png" alt="УрФУ" class="logo">
-      </div>
-      <div class="title-block">
-        <h1>Виртуальная лабораторная: испытание пластинчатого теплообменника</h1>
-        <p class="subtitle">
-          Учебная интерактивная модель по методике лабораторной работы №2.
-          Управляйте режимом (прямоток/противоток), расходом и температурами — наблюдайте,
-          как меняются <b>эффективность ε</b>, <b>тепловая мощность</b> и <b>коэффициент теплопередачи k</b>.
-        </p>
+      <img src="./assets/urfu.png" alt="УрФУ" class="logo">
+      <div>
+        <h1>Виртуальная лабораторная работа №2: испытание пластинчатого теплообменника</h1>
+        <p class="subtitle">Задайте исходные данные, выполните серию виртуальных опытов, проанализируйте тепловую эффективность ε, сохраните журнал и скачайте Excel-совместимый отчет.</p>
       </div>
     </div>
   </header>
 
   <main class="layout">
-    <!-- LEFT: chart + KPIs -->
     <section class="card">
       <div class="card-header">
-        <h2>Главный график: эффективность теплообменника ε = Q / Q<sub>max</sub></h2>
-        <p class="muted">
-          График показывает зависимость эффективности ε от расхода горячего теплоносителя при текущих настройках.
-          На одном поле приведены кривые для прямотока и противотока — так проще увидеть выигрыш противотока.
-        </p>
+        <h2>Эффективность теплообменника</h2>
+        <p class="muted">График показывает зависимость ε от расхода горячего теплоносителя при текущих настройках. Ползунки температуры, расходов, k и потерь немедленно перестраивают кривые.</p>
       </div>
-
-      <div class="chart-wrap">
-        <canvas id="mainChart"></canvas>
-      </div>
+      <div class="chart-wrap"><canvas id="mainChart"></canvas></div>
 
       <div class="kpis">
-        <div class="kpi">
-          <div class="kpi-title">Режим</div>
-          <div class="kpi-value" id="modeName">—</div>
-        </div>
-        <div class="kpi">
-          <div class="kpi-title">Эффективность ε</div>
-          <div class="kpi-value" id="epsVal">—</div>
-          <div class="kpi-sub muted">ε = Q / Qmax</div>
-        </div>
-        <div class="kpi">
-          <div class="kpi-title">Q<sub>х</sub> (полезная)</div>
-          <div class="kpi-value" id="Qcold">—</div>
-          <div class="kpi-sub muted">по холодному контуру</div>
-        </div>
-        <div class="kpi">
-          <div class="kpi-title">Δt<sub>ln</sub></div>
-          <div class="kpi-value" id="dtlm">—</div>
-          <div class="kpi-sub muted">средняя логарифмическая</div>
-        </div>
-        <div class="kpi">
-          <div class="kpi-title">k (расчёт)</div>
-          <div class="kpi-value" id="kCalc">—</div>
-          <div class="kpi-sub muted">k = Qх / (F·Δtln)</div>
-        </div>
-        <div class="kpi">
-          <div class="kpi-title">T<sub>гор</sub> вых</div>
-          <div class="kpi-value" id="ThOut">—</div>
-          <div class="kpi-sub muted">T4</div>
-        </div>
-        <div class="kpi">
-          <div class="kpi-title">T<sub>хол</sub> вых</div>
-          <div class="kpi-value" id="TcOut">—</div>
-          <div class="kpi-sub muted">T2</div>
-        </div>
+        <div class="kpi"><div class="kpi-title">Режим</div><div class="kpi-value" id="modeName">—</div></div>
+        <div class="kpi"><div class="kpi-title">Эффективность ε</div><div class="kpi-value" id="epsVal">—</div></div>
+        <div class="kpi"><div class="kpi-title">Qх (полезная), кВт</div><div class="kpi-value" id="Qcold">—</div></div>
+        <div class="kpi"><div class="kpi-title">Qг (переданная), кВт</div><div class="kpi-value" id="Qhot">—</div></div>
+        <div class="kpi"><div class="kpi-title">T4 (горячий выход), °C</div><div class="kpi-value" id="ThOut">—</div></div>
+        <div class="kpi"><div class="kpi-title">T2 (холодный выход), °C</div><div class="kpi-value" id="TcOut">—</div></div>
+        <div class="kpi"><div class="kpi-title">Δt<sub>ln</sub>, °C</div><div class="kpi-value" id="dtlm">—</div></div>
+        <div class="kpi"><div class="kpi-title">k<sub>расч</sub>, Вт/(м²·К)</div><div class="kpi-value" id="kCalc">—</div></div>
       </div>
 
-      <details class="details">
-        <summary>Показать расчётные формулы</summary>
-        <div class="details-body">
-          <p><b>Площадь поверхности теплообмена:</b> F = 0,12 м².</p>
-          <p><b>Тепловая мощность:</b></p>
-          <ul>
-            <li>Q<sub>г</sub> = V<sub>г</sub>·c<sub>г</sub>·(T1 − T4)</li>
-            <li>Q<sub>х</sub> = V<sub>х</sub>·c<sub>х</sub>·(T2 − T3)</li>
-          </ul>
-          <p><b>Температурный напор (Δt<sub>ln</sub>):</b> рассчитывается по формуле прямотока или противотока.</p>
-          <p><b>Коэффициент теплопередачи:</b> k = Q<sub>х</sub> / (F·Δt<sub>ln</sub>).</p>
-          <p><b>Эффективность:</b> ε = Q / Q<sub>max</sub>, где Q<sub>max</sub> = C<sub>min</sub>·(T1 − T3).</p>
+      <div class="table-wrap">
+        <div class="section-head"><h3>Текущий опыт (таблица результатов)</h3></div>
+        <table>
+          <thead>
+            <tr><th>Параметр</th><th>Обозначение</th><th>Значение</th></tr>
+          </thead>
+          <tbody id="currentTable"></tbody>
+        </table>
+      </div>
+
+      <div class="table-wrap">
+        <div class="section-head">
+          <h3>Журнал проведенных экспериментов</h3>
+          <button class="btn ghost" id="clearJournalBtn">Очистить журнал</button>
         </div>
-      </details>
+        <table>
+          <thead>
+            <tr>
+              <th>#</th><th>Дата/время</th><th>Режим</th><th>T1</th><th>T3</th><th>Vг</th><th>Vх</th><th>ε</th><th>Qх, Вт</th><th>kрасч</th>
+            </tr>
+          </thead>
+          <tbody id="journalTable"></tbody>
+        </table>
+      </div>
+
+      <div class="table-wrap">
+        <h3>Профессиональная аналитика и диагностика</h3>
+        <div id="analytics" class="analytics"></div>
+      </div>
     </section>
 
-    <!-- RIGHT: controls -->
     <aside class="card">
       <div class="card-header">
-        <h2>Панель управления режимом</h2>
-        <p class="muted">Ползунки задают «установившийся режим» и параметры модели (UA). Расход холодного контура принят постоянным.</p>
+        <h2>Исходные данные опыта</h2>
+        <p class="muted">Введите параметры установки и запустите расчет стационарного режима.</p>
       </div>
 
       <div class="control">
-        <div class="control-row">
-          <label for="mode">Схема движения теплоносителей</label>
-          <select id="mode">
-            <option value="parallel">Прямоток</option>
-            <option value="counter" selected>Противоток</option>
-          </select>
-        </div>
+        <div class="control-row"><label for="mode">Схема движения</label></div>
+        <select id="mode">
+          <option value="counter" selected>Противоток</option>
+          <option value="parallel">Прямоток</option>
+        </select>
       </div>
 
       <div class="control">
-        <div class="control-row">
-          <label for="ThIn">T1 — горячий на входе, °C</label>
-          <div class="value"><span id="ThInVal"></span></div>
-        </div>
-        <input id="ThIn" type="range" min="30" max="80" step="1" value="55"/>
+        <div class="control-row"><label for="ThIn">T1 — горячий вход, °C</label><span id="ThInVal" class="value"></span></div>
+        <input id="ThIn" type="range" min="35" max="85" step="1" value="60">
       </div>
 
       <div class="control">
-        <div class="control-row">
-          <label for="TcIn">T3 — холодный на входе, °C</label>
-          <div class="value"><span id="TcInVal"></span></div>
-        </div>
-        <input id="TcIn" type="range" min="5" max="40" step="1" value="20"/>
+        <div class="control-row"><label for="TcIn">T3 — холодный вход, °C</label><span id="TcInVal" class="value"></span></div>
+        <input id="TcIn" type="range" min="5" max="40" step="1" value="20">
       </div>
 
       <div class="control">
-        <div class="control-row">
-          <label for="Vh">Vг — расход горячего, л/мин</label>
-          <div class="value"><span id="VhVal"></span></div>
-        </div>
-        <input id="Vh" type="range" min="0.2" max="3.0" step="0.1" value="1.5"/>
+        <div class="control-row"><label for="Vh">Vг — расход горячего, л/мин</label><span id="VhVal" class="value"></span></div>
+        <input id="Vh" type="range" min="0.2" max="3" step="0.1" value="1.6">
       </div>
 
       <div class="control">
-        <div class="control-row">
-          <label>Vх — расход холодного, л/мин</label>
-          <div class="value"><span id="VcVal"></span></div>
-        </div>
-        <div class="note">
-          Принято постоянным: <b>1,2 л/мин</b> (как в методике).
-        </div>
+        <div class="control-row"><label for="Vc">Vх — расход холодного, л/мин</label><span id="VcVal" class="value"></span></div>
+        <input id="Vc" type="range" min="0.2" max="3" step="0.1" value="1.2">
       </div>
 
       <div class="control">
-        <div class="control-row">
-          <label for="k">k — «качество теплообмена», Вт/(м²·К)</label>
-          <div class="value"><span id="kVal"></span></div>
-        </div>
-        <input id="k" type="range" min="200" max="6000" step="50" value="2500"/>
-        <div class="note muted">
-          Этот параметр играет роль суммарной теплопередачи (включая турбулизацию, загрязнение, контактные сопротивления).
-          Чем больше k — тем выше UA = k·F и тем ближе аппарат к «идеальному».
-        </div>
+        <div class="control-row"><label for="k">k — коэффициент теплопередачи, Вт/(м²·К)</label><span id="kVal" class="value"></span></div>
+        <input id="k" type="range" min="200" max="6500" step="50" value="2600">
       </div>
 
       <div class="control">
-        <div class="control-row">
-          <label for="loss">Потери в окружающую среду, %</label>
-          <div class="value"><span id="lossVal"></span></div>
-        </div>
-        <input id="loss" type="range" min="0" max="20" step="1" value="5"/>
-        <div class="note muted">
-          Моделирует ситуацию Qг &gt; Qх (в реальной установке часть теплоты уходит в помещение).
-        </div>
+        <div class="control-row"><label for="loss">Потери в окружающую среду, %</label><span id="lossVal" class="value"></span></div>
+        <input id="loss" type="range" min="0" max="25" step="1" value="5">
       </div>
 
-      <div class="control">
-        <button id="resetBtn" class="btn">Сбросить к типовым значениям</button>
+      <div class="actions">
+        <button id="runBtn" class="btn primary">Провести эксперимент</button>
+        <button id="addJournalBtn" class="btn">Добавить в журнал</button>
+        <button id="exportBtn" class="btn">Скачать отчет (Excel)</button>
+        <button id="resetBtn" class="btn ghost">Сбросить параметры</button>
       </div>
 
       <div class="scheme">
-        <img src="./assets/scheme.jpg" alt="Схема экспериментальной установки" />
-        <div class="muted scheme-caption">Схема стенда (по методическим указаниям).</div>
+        <img src="./assets/scheme.jpg" alt="Схема экспериментальной установки"/>
+        <div class="scheme-caption muted">Схема экспериментальной установки из методических указаний.</div>
       </div>
-
-      <details class="details">
-        <summary>Как читать температуры T1…T4?</summary>
-        <div class="details-body">
-          <ul>
-            <li><b>T1</b> — температура горячего теплоносителя на входе в теплообменник.</li>
-            <li><b>T4</b> — температура горячего теплоносителя на выходе из теплообменника.</li>
-            <li><b>T3</b> — температура холодного теплоносителя на входе (или выходе) — зависит от направления движения.</li>
-            <li><b>T2</b> — температура холодного теплоносителя на выходе (или входе) — зависит от направления движения.</li>
-          </ul>
-          <p class="muted">В модели мы всегда задаём входы: T1 (горячий вход) и T3 (холодный вход). Выходы рассчитываются.</p>
-        </div>
-      </details>
-
     </aside>
   </main>
 
-  <footer class="footer">
-    <div class="muted">
-      Проект: «Интерактивные тренажёры». Реализовано как статическое web-приложение (HTML/CSS/JS), запускается в любом современном браузере.
-    </div>
-  </footer>
-
+  <footer class="footer muted">Статическое web-приложение (HTML/CSS/JS): запускается в браузере без установки дополнительного ПО.</footer>
   <script src="./app.js"></script>
 </body>
 </html>
